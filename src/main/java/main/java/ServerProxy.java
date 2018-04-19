@@ -49,55 +49,13 @@ public class ServerProxy {
                     }
                 }
 
-//              Czytanie z pliku CSV
-                Map<String, List<Integer>> stats = new HashMap<String, List<Integer>>();
+                Map<String, List<Integer>> stats = new HashMap<String, List<Integer>>(); // Zmienna (globalna) dla statystyk
 
+//              Czytanie z pliku CSV
                 CSVReader csvReader = new CSVReader(new FileReader("/Users/Szalbik/Downloads/ServerProxy/statystics.csv"));
                 List<String[]> records = csvReader.readAll();
-//                Map<String, List<Integer>> recordStats = new HashMap<String, List<Integer>>();
-                for (String[] record : records) {
-                    String[] stat = record[1].split("[\\[\\]\\,\\s]+");
-                    List<Integer> statystics = new ArrayList<>();
-                    for (int i = 1; i < 4; i++) {
-                        statystics.add(parseInt(stat[i]));
-                    }
-                    stats.put(record[0], statystics);
-                }
-
-//              Update statystyk
-                if (stats.keySet().contains(addres.toString())) {
-                    for (Map.Entry<String, List<Integer>> statEntry : stats.entrySet()) {
-                        if (statEntry.getKey().equals(addres.toString())) {
-                            List<Integer> recordStats = statEntry.getValue();
-//                            String value = statEntry.getValue().toString();
-                            int iloscWejscia = recordStats.get(0)+1;
-                            recordStats.set(0, iloscWejscia);
-
-                            byte[] reqestBody = streamToBytes(exchange.getRequestBody());
-                            int reqbodylength = recordStats.get(1);
-                            recordStats.set(1, reqbodylength + reqestBody.length);
-                            statEntry.setValue(recordStats);
-                        }
-                    }
-                } else {
-                    List<Integer> defaultStats = new ArrayList<>();
-                    defaultStats.add(1);
-                    byte[] reqestBody = streamToBytes(exchange.getRequestBody());
-//                    byte[] resBody = exchange.getResponseBody();
-
-                    defaultStats.add(reqestBody.length);
-                    defaultStats.add(0);
-                    stats.put(addres.toString(), defaultStats);
-                }
-
-//              Zapisywanie do pliku CSV
-                CSVWriter csvWriter = new CSVWriter(new FileWriter("/Users/Szalbik/Downloads/ServerProxy/statystics.csv"));
-
-                for (Map.Entry statEntry : stats.entrySet()) {
-                    csvWriter.writeNext(new String[]{statEntry.getKey().toString(), statEntry.getValue().toString()});
-                }
-                csvWriter.flush();
-                csvWriter.close();
+                odczytZPliku(stats, records);
+                csvReader.close();
 
 //            Connection setup
                 HttpURLConnection conn = (HttpURLConnection) addres.openConnection();
@@ -119,16 +77,21 @@ public class ServerProxy {
     //            for (String key : headers.keySet()) {
     //                conn.setRequestProperty(key, headers.get(key).get(0));
     //            }
-
-    //          Przepisanie body
                 conn.setRequestMethod(exchange.getRequestMethod());
-
                 conn.setInstanceFollowRedirects(false);
 
-                conn.setDoOutput(true);
-                byte[] reqBody = streamToBytes(exchange.getRequestBody());
-                conn.getOutputStream().write(reqBody);
+                //          Przepisanie body
+                if (exchange.getRequestMethod().equals("POST")) {
 
+                    conn.setDoOutput(true);
+
+                    byte[] requestBodyBytes = streamToBytes(exchange.getRequestBody());
+                    conn.getOutputStream().write(requestBodyBytes);
+                    OutputStream os = conn.getOutputStream();
+                    os.write(requestBodyBytes);
+                    os.close();
+                    updateStatystykRequest(requestBodyBytes, addres, stats);
+                }
 
     //            Przepisanie ConnectionHeaders do exchange ResponseHeaders
                 Map headerFields = conn.getHeaderFields();
@@ -144,21 +107,101 @@ public class ServerProxy {
                 exchange.getResponseHeaders().set("Via", "localhost:8888");
                 exchange.getResponseHeaders().set("Client-Ip", exchange.getRemoteAddress().toString());
 
-                InputStream stream;
 
+                InputStream stream;
                 if (conn.getResponseCode() < 400) {
                     stream = conn.getInputStream();
                 } else {
                     stream = conn.getErrorStream();
                 }
-
                 byte[] streamBytes = streamToBytes(stream);
+                stream.close();
                 exchange.sendResponseHeaders(conn.getResponseCode(), streamBytes.length);
                 OutputStream os = exchange.getResponseBody();
+                updateStatystykResponse(streamBytes, addres, stats);
                 os.write(streamBytes);
                 os.close();
+
+
+//              Zapisywanie do pliku CSV
+                CSVWriter csvWriter = new CSVWriter(new FileWriter("/Users/Szalbik/Downloads/ServerProxy/statystics.csv"));
+                zapisDoPliku(stats, csvWriter);
+                csvWriter.flush();
+                csvWriter.close();
+
             } catch (Exception e) {
                 e.printStackTrace();
+            }
+        }
+
+        private void odczytZPliku(Map<String, List<Integer>> stats, List<String[]> records) {
+            for (String[] record : records) {
+                String[] stat = record[1].split("[\\[\\]\\,\\s]+");
+                List<Integer> statystics = new ArrayList<>();
+                for (int i = 1; i < 4; i++) {
+                    statystics.add(parseInt(stat[i]));
+                }
+                stats.put(record[0], statystics);
+            }
+        }
+
+        private void zapisDoPliku(Map<String, List<Integer>> stats, CSVWriter csvWriter) {
+            for (Map.Entry statEntry : stats.entrySet()) {
+                csvWriter.writeNext(new String[]{statEntry.getKey().toString(), statEntry.getValue().toString()});
+            }
+        }
+
+        private void updateStatystykResponse(byte[] responseBody, URL addres, Map<String, List<Integer>> stats) throws IOException {
+            if (stats.keySet().contains(addres.toString())) {
+                for (Map.Entry<String, List<Integer>> statEntry : stats.entrySet()) {
+                    if (statEntry.getKey().equals(addres.toString())) {
+                        List<Integer> recordStats = statEntry.getValue();
+                        int iloscWejscia = recordStats.get(0)+1;
+                        recordStats.set(0, iloscWejscia);
+
+//                        byte[] reqestBody = streamToBytes(os);
+                        int reqbodylength = recordStats.get(2);
+                        recordStats.set(2, reqbodylength + responseBody.length);
+                        statEntry.setValue(recordStats);
+                    }
+                }
+            } else {
+                List<Integer> defaultStats = new ArrayList<>();
+                defaultStats.add(1); //  Pierwszy wiersz
+
+//                    byte[] reqestBody = streamToBytes(exchange.getRequestBody());
+                defaultStats.add(0); // Drugi wiersz requestBody.length
+
+                defaultStats.add(0 + responseBody.length); // Trzeci wiersz
+
+                stats.put(addres.toString(), defaultStats);
+            }
+        }
+
+        private void updateStatystykRequest(byte[] requestBody, URL addres, Map<String, List<Integer>> stats) throws IOException {
+            if (stats.keySet().contains(addres.toString())) {
+                for (Map.Entry<String, List<Integer>> statEntry : stats.entrySet()) {
+                    if (statEntry.getKey().equals(addres.toString())) {
+                        List<Integer> recordStats = statEntry.getValue();
+                        int iloscWejscia = recordStats.get(0)+1;
+                        recordStats.set(0, iloscWejscia);
+
+//                        byte[] reqestBody = streamToBytes(os);
+                        int reqbodylength = recordStats.get(1);
+                        recordStats.set(1, reqbodylength + requestBody.length);
+                        statEntry.setValue(recordStats);
+                    }
+                }
+            } else {
+                List<Integer> defaultStats = new ArrayList<>();
+                defaultStats.add(1); //  Pierwszy wiersz
+
+//                    byte[] reqestBody = streamToBytes(exchange.getRequestBody());
+                defaultStats.add(0 + requestBody.length); // Drugi wiersz requestBody.length
+
+                defaultStats.add(0); // Trzeci wiersz
+
+                stats.put(addres.toString(), defaultStats);
             }
         }
 
